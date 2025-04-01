@@ -58,7 +58,7 @@ class DepthCrafterDemo:
         self,
         unet_path: str,
         pre_trained_path: str,
-        cpu_offload: str = "model",
+        # cpu_offload: str = None,
     ):
         unet = DiffusersUNetSpatioTemporalConditionModelDepthCrafter.from_pretrained(
             unet_path,
@@ -71,19 +71,21 @@ class DepthCrafterDemo:
             unet=unet,
             torch_dtype=torch.float16,
             variant="fp16",
+            device_map="balanced"
         )
 
         # for saving memory, we can offload the model to CPU, or even run the model sequentially to save more memory
-        if cpu_offload is not None:
-            if cpu_offload == "sequential":
-                # This will slow, but save more memory
-                self.pipe.enable_sequential_cpu_offload()
-            elif cpu_offload == "model":
-                self.pipe.enable_model_cpu_offload()
-            else:
-                raise ValueError(f"Unknown cpu offload option: {cpu_offload}")
-        else:
-            self.pipe.to("cuda")
+        # if cpu_offload is not None:
+        #     if cpu_offload == "sequential":
+        #         # This will slow, but save more memory
+        #         self.pipe.enable_sequential_cpu_offload()
+        #     elif cpu_offload == "model":
+        #         self.pipe.enable_model_cpu_offload()
+        #     else:
+        #         raise ValueError(f"Unknown cpu offload option: {cpu_offload}")
+        # else:
+        #     self.pipe.to("cuda")
+
         # enable attention slicing and xformers memory efficient attention
         try:
             self.pipe.enable_xformers_memory_efficient_attention()
@@ -130,8 +132,8 @@ class DepthCrafterDemo:
                 window_size=window_size,
                 overlap=overlap,
                 track_time=track_time,
+                decode_chunk_size=4
             ).frames[0]
-
         # convert the three-channel output to a single channel depth map
         res = res.sum(-1) / res.shape[-1]
 
@@ -139,7 +141,7 @@ class DepthCrafterDemo:
         tensor_res = torch.tensor(res).unsqueeze(1).float().contiguous().cuda()
         res = F.interpolate(tensor_res, size=(original_height, original_width), mode='bilinear', align_corners=False)
         res = res.cpu().numpy()[:,0,:,:]
-        
+
         # normalize the depth map to [0, 1] across the whole video
         res = (res - res.min()) / (res.max() - res.min())
         # visualize the depth map and save the results
@@ -155,7 +157,7 @@ class DepthCrafterDemo:
             write_video(save_path + "_depth_vis.mp4", vis*255.0, fps=target_fps, video_codec="h264", options={"crf": "16"})
 
         return res, vis
-    
+
 
 class ForwardWarpStereo(nn.Module):
     def __init__(self, eps=1e-6, occlu_map=False):
@@ -194,15 +196,15 @@ class ForwardWarpStereo(nn.Module):
             occlu_map.clamp_(0.0, 1.0)
             occlu_map = 1.0 - occlu_map
             return res, occlu_map
-        
+
 
 def DepthSplatting(
-        input_video_path, 
-        output_video_path, 
-        video_depth, 
-        depth_vis, 
-        max_disp, 
-        process_length, 
+        input_video_path,
+        output_video_path,
+        video_depth,
+        depth_vis,
+        max_disp,
+        process_length,
         batch_size):
     '''
     Depth-Based Video Splatting Using the Video Depth.
@@ -212,7 +214,7 @@ def DepthSplatting(
         video_depth: Video depth with shape of [T, H, W] in [0, 1].
         depth_vis: Visualized video depth with shape of [T, H, W, 3] in [0, 1].
         process_length: The length of video to process.
-        batch_size: The batch size for splatting to save GPU memory. 
+        batch_size: The batch size for splatting to save GPU memory.
     '''
     vid_reader = VideoReader(input_video_path, ctx=cpu(0))
     original_fps = vid_reader.get_avg_fps()
@@ -230,9 +232,9 @@ def DepthSplatting(
 
     # Initialize OpenCV VideoWriter
     out = cv2.VideoWriter(
-        output_video_path, 
+        output_video_path,
         cv2.VideoWriter_fourcc(*"mp4v"),
-        original_fps, 
+        original_fps,
         (width * 2, height * 2)
     )
 
@@ -277,7 +279,7 @@ def main(
     pre_trained_path: str,
     max_disp: float = 20.0,
     process_length = -1,
-    batch_size = 10
+    batch_size = 1
 ):
     depthcrafter_demo = DepthCrafterDemo(
         unet_path=unet_path,
@@ -291,12 +293,12 @@ def main(
     )
 
     DepthSplatting(
-        input_video_path, 
-        output_video_path, 
-        video_depth, 
+        input_video_path,
+        output_video_path,
+        video_depth,
         depth_vis,
         max_disp,
-        process_length, 
+        process_length,
         batch_size
     )
 
